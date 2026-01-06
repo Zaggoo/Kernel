@@ -1,2 +1,2 @@
 # Kernel
-A small project for the OS subject
+Sistema eragilearen ikasgaiko proiektu txiki bat

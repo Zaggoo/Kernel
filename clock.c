@@ -12,7 +12,8 @@ void *kernelclock(void *arg){
             pthread_cond_wait(&shared->cond, &shared->mutex);
         }
         usleep(1000000 / TICKRATE);
-        printf("tick\n");
+        if (enable_clock_prints) printf("[erlojua] tik\n");
+        schedule();
         shared->done = 0;
         pthread_cond_broadcast(&shared->cond2);
         pthread_mutex_unlock(&shared->mutex);

@@ -14,8 +14,11 @@ void *timer(void *arg){
         tick++;
         if(tick == ts->nticks){
             tick = 0;
-            // SEINALEA BIDALI PROCESS GENERATORRI
-            printf("Timer %d\n", ts->id);
+            if (ts->function == PROCESS_GENERATOR) {
+                load(ts->id);
+            } else if (ts->function == TIMER) {
+                if (enable_timer_prints) printf("[tenporizadorea] Tenporizadorearen id=%d\n", ts->id);
+            }
         }
         pthread_cond_signal(&shared->cond);
         pthread_cond_wait(&shared->cond2, &shared->mutex);
