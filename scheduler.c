@@ -3,11 +3,18 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-pcb_node_t *current_process = NULL;
+#define MAX_RUNNING (NUM_CORES * NUM_THREADS_PER_CORE)
+pcb_node_t *running_processes[MAX_RUNNING] = {NULL};
+
+
+static const int slot_to_core[MAX_RUNNING] = {0, 0, 1, 1};
+static const int slot_to_thread[MAX_RUNNING] = {0, 1, 0, 1};
+
 int enemy_attack, enemy_defense, enemy_health;
 bool has_enemy = false;
 
 void print_random_enemy_art() {
+    printf("%s", COLOR_BRIGHT_RED);  
     int num_ascii = 6;
     int art = rand() % num_ascii;
     switch(art) {
@@ -33,7 +40,7 @@ void print_random_enemy_art() {
             printf("          (,-.`.    ,',-.`. `__,',\n");
             printf("           |/#\\ ),-','#\\`= ,'.` |\n");
             printf("           `._/)  -'.\\_,    ) ))|\n");
-            printf("           /  (_.)\     .   -'//\n");
+            printf("           /  (_.)\\     .   -'//\n");
             printf("          (  /\\____/\\    ) )`'\\\n");
             printf("           \\ |V----V||  ' ,    \\\n");
             printf("            |`- -- -'   ,'   \\  \\      _____\n");
@@ -109,114 +116,212 @@ void print_random_enemy_art() {
             printf("   (__)  /\n");
             printf("     `.__.', \n");
     }
+    printf("%s", COLOR_RESET);  
 }
 
 void schedule() {
-    // Hartu hurrengo prozesua ready-tik ausaz
-    if (current_process == NULL && process_list != NULL) {
-        // Kontatu prozesuak
-        int count = 0;
-        pcb_node_t *temp = process_list;
-        while (temp) {
-            count++;
-            temp = temp->next;
-        }
-        // Aukeratu ausaz
-        int index = rand() % count;
-        temp = process_list;
-        for (int i = 0; i < index; i++) {
-            temp = temp->next;
-        }
-        // Kendu aukeratua
-        if (index == 0) {
-            current_process = process_list;
-            process_list = process_list->next;
-        } else {
-            pcb_node_t *prev = process_list;
-            for (int i = 0; i < index - 1; i++) {
-                prev = prev->next;
+    
+    for (int slot = 0; slot < MAX_RUNNING && process_list != NULL; slot++) {
+        if (running_processes[slot] == NULL) {
+            
+            int count = 0;
+            pcb_node_t *temp = process_list;
+            while (temp) {
+                count++;
+                temp = temp->next;
             }
-            current_process = prev->next;
-            prev->next = current_process->next;
+            
+            int index = rand() % count;
+            temp = process_list;
+            for (int i = 0; i < index; i++) {
+                temp = temp->next;
+            }
+            
+            if (index == 0) {
+                running_processes[slot] = process_list;
+                process_list = process_list->next;
+            } else {
+                pcb_node_t *prev = process_list;
+                for (int i = 0; i < index - 1; i++) {
+                    prev = prev->next;
+                }
+                running_processes[slot] = prev->next;
+                prev->next = running_processes[slot]->next;
+            }
+            running_processes[slot]->next = NULL;
+            running_processes[slot]->pcb.state = RUNNING;
+            
+            
+            int core = slot_to_core[slot];
+            int thread = slot_to_thread[slot];
+            cpu_load_process(core, thread, running_processes[slot]);
+            
+            if (enable_scheduler_prints) printf("\n[antolatzailea] Prozesua %d kargatua Core %d, Thread %d-n (slot %d)\n", 
+                running_processes[slot]->pcb.pid, core, thread, slot);
         }
-        current_process->next = NULL;
-        current_process->pcb.state = RUNNING;
-        if (enable_scheduler_prints) printf("\n\n[antolatzailea] %d prozesua exekutatzen\n", current_process->pcb.pid);
-        // Etsaia sortu
+    }
+
+    
+    int num_running = 0;
+    for (int i = 0; i < MAX_RUNNING; i++) {
+        if (running_processes[i] != NULL) num_running++;
+    }
+    if (num_running > 0 && !has_enemy) {
         enemy_attack = rand() % 10 + 1;
         enemy_defense = rand() % 5 + 1;
-        enemy_health = rand() % 20 + 10;
+        enemy_health = (rand() % 40 + 20) * num_running;
         has_enemy = true;
         if (enable_scheduler_prints) {
             print_random_enemy_art();
-            printf("[antolatzailea] Etsaia sortua: Atk=%d, Def=%d, Vit=%d\n", enemy_attack, enemy_defense, enemy_health);
+            printf("%s[antolatzailea] Etsaia sortuta: Atk=%d, Def=%d, Vit=%d%s\n", 
+                   COLOR_BRIGHT_RED, enemy_attack, enemy_defense, enemy_health, COLOR_RESET);
         }
     }
 
-    if (current_process != NULL && has_enemy) {
-        current_process->pcb.total_execution_time++;
-        // Prozesuak erasotzen du
-        int damage = current_process->pcb.atk - enemy_defense;
-        if (damage > 0) {
-            enemy_health -= damage;
-            if (enable_scheduler_prints) printf("[antolatzailea] Prozesuak etsaiari jo egin dio: %d, etsaiaren vit=%d\n", damage, enemy_health);
+    
+    if (has_enemy) {
+        int total_damage_to_enemy = 0;
+        for (int i = 0; i < MAX_RUNNING; i++) {
+            if (running_processes[i] != NULL) {
+                running_processes[i]->pcb.total_execution_time++;
+                
+                int damage = running_processes[i]->pcb.atk - enemy_defense;
+                if (damage > 0) {
+                    total_damage_to_enemy += damage;
+                    if (enable_scheduler_prints) printf("[antolatzailea] Prozesua %d etsaiari jo egin dio: %d\n", running_processes[i]->pcb.pid, damage);
+                }
+                
+                int damage_to_proc = enemy_attack - running_processes[i]->pcb.def;
+                if (damage_to_proc > 0) {
+                    running_processes[i]->pcb.vit -= damage_to_proc;
+                    if (enable_scheduler_prints) printf("[antolatzailea] Etsaiak prozesuari %d jo egin dio: %d, prozesuaren vit=%d\n", running_processes[i]->pcb.pid, damage_to_proc, running_processes[i]->pcb.vit);
+                }
+            }
         }
-        // Etsaiak erasotzen du
-        damage = enemy_attack - current_process->pcb.def;
-        if (damage > 0) {
-            current_process->pcb.vit -= damage;
-            if (enable_scheduler_prints) printf("[antolatzailea] Etsaiak prozesuari jo egin dio: %d, prozesuaren vit=%d\n", damage, current_process->pcb.vit);
-        }
-        // Egiaztatu
+        
+        enemy_health -= total_damage_to_enemy;
+        if (enable_scheduler_prints && total_damage_to_enemy > 0) printf("[antolatzailea] Etsaiaren vit=%d\n", enemy_health);
+        
+        
         if (enemy_health <= 0) {
-            if (enable_scheduler_prints) printf("[antolatzailea] Prozesua %d irabazi du!\n", current_process->pcb.pid);
-            // Etsai berria sortu
+            if (enable_scheduler_prints) printf("[antolatzailea] Prozesuek irabazi dute!\n");
+            
+            int active_count = 0;
+            for (int i = 0; i < MAX_RUNNING; i++) {
+                if (running_processes[i] != NULL) active_count++;
+            }
             enemy_attack = rand() % 10 + 1;
             enemy_defense = rand() % 3 + 1;
-            enemy_health = rand() % 40 + 10;
+            enemy_health = (rand() % 60 + 20) * active_count;
             if (enable_scheduler_prints) {
                 print_random_enemy_art();
-                printf("[antolatzailea] Etsai berria sortua: Atk=%d, Def=%d, Vit=%d\n", enemy_attack, enemy_defense, enemy_health);
+                printf("%s[antolatzailea] Etsai berria sortua: Atk=%d, Def=%d, Vit=%d%s\n", 
+                       COLOR_BRIGHT_RED, enemy_attack, enemy_defense, enemy_health, COLOR_RESET);
             }
-        } else if (current_process->pcb.vit <= 0) {
-            if (enable_scheduler_prints) printf("[antolatzailea] Prozesua %d galdu du!\n", current_process->pcb.pid);
-            // Itzuli ready-ra
-            current_process->pcb.state = READY;
-            current_process->next = process_list;
-            process_list = current_process;
-            current_process = NULL;
-            has_enemy = false;
         }
-    } else if (current_process != NULL) {
-        // Ez dago etsaia
-        current_process->pcb.total_execution_time++;
+        
+        
+        for (int i = 0; i < MAX_RUNNING; i++) {
+            if (running_processes[i] != NULL && running_processes[i]->pcb.vit <= 0) {
+                
+                running_processes[i]->pcb.death_count++;
+                
+                
+                int base_vit = running_processes[i]->pcb.atk + running_processes[i]->pcb.def;
+                int bonus = running_processes[i]->pcb.death_count * 50;
+                running_processes[i]->pcb.vit = base_vit + bonus;
+                
+                if (enable_scheduler_prints) {
+                    printf("[antolatzailea] Prozesua %d hil da borrokan! (Heriotza #%d) Ilara itzuliko da bizitzarekin: %d\n", 
+                           running_processes[i]->pcb.pid, 
+                           running_processes[i]->pcb.death_count,
+                           running_processes[i]->pcb.vit);
+                }
+                
+                running_processes[i]->pcb.state = READY;
+                
+                running_processes[i]->next = process_list;
+                process_list = running_processes[i];
+                running_processes[i] = NULL;
+            }
+        }
+        
+        
+        int remaining = 0;
+        for (int i = 0; i < MAX_RUNNING; i++) {
+            if (running_processes[i] != NULL) remaining++;
+        }
+        if (remaining == 0) has_enemy = false;
+    } else {
+        
+        for (int i = 0; i < MAX_RUNNING; i++) {
+            if (running_processes[i] != NULL) {
+                running_processes[i]->pcb.total_execution_time++;
+            }
+        }
     }
 
-    // Hutsegite kritikoaren aukera
-    if (current_process != NULL && rand() % 20 == 0) {
-        current_process->pcb.state = TERMINATED;
-        if (enable_scheduler_prints) {
-            printf("     _.--\"\"--._\n");
-            printf("    /  _    _  \\\n");
-            printf(" _  ( (_\\  /_) )  _\n");
-            printf("{ \\._\\   /\\   /_./ }\n");
-            printf("/_\"=-.}______{.-=\"_\\\n");
-            printf(" _  _.=(\"\"\")=. _  _\n");
-            printf("(_'\"_.-\"`~~`\"-._\"'_)\n");
-            printf(" {_'            '_}\n");
-            printf("[antolatzailea] Hutsegite kritikoa! Prozesua %d amaitua\n", current_process->pcb.pid);
+    
+    for (int i = 0; i < MAX_RUNNING; i++) {
+        if (running_processes[i] != NULL) {
+            
+            if (running_processes[i]->pcb.state == TERMINATED) {
+                if (enable_scheduler_prints) printf("[antolatzailea] Prozesua %d amaitua (EXIT)\n", running_processes[i]->pcb.pid);
+                extern int processes_normal_exit;
+                processes_normal_exit++;
+                free(running_processes[i]);
+                running_processes[i] = NULL;
+            }
+            
+            else if (rand() %  101 == 0) {
+                running_processes[i]->pcb.state = TERMINATED;
+                
+                
+                const char *death_messages[] = {
+                    "%d prozesua platano azal batekin erori da",
+                    "%d prozesuari bihotzeko bat eman dio",
+                    "%d prozesuak bere listuarekin ito egin da",
+                    "%d prozesuari piano bat erori zaio buruan",
+                    "%d prozesuak ez du zetorren harria ikusi",
+                    "%d prozesuak su-bola gertuegi bota du",
+                    "%d prozesuak nekatu egin da eta ez du bueltatu nahi"
+                };
+                int num_messages = 7;
+                int random_msg = rand() % num_messages;
+                
+                printf("%s", COLOR_BRIGHT_RED);
+                printf("     _.--\"\"--._\n");
+                printf("    /  _    _  \\\n");
+                printf(" _  ( (_\\  /_) )  _\n");
+                printf("{ \\._\\   /\\   /_./ }\n");
+                printf("/_\"=-.}______{.-=\"_\\\n");
+                printf(" _  _.=(\"\"\")=. _  _\n");
+                printf("(_'\"_.-\"`~~`\"-._\"'_)\n");
+                printf(" {_'            '_}\n");
+                printf("[HUTSEGITE KRITIKOA] ");
+                printf(death_messages[random_msg], running_processes[i]->pcb.pid);
+                printf("\n");
+                printf("%s", COLOR_RESET);
+                fflush(stdout);
+                extern int processes_critical_failure;
+                processes_critical_failure++;
+                free(running_processes[i]);
+                running_processes[i] = NULL;
+            }
+            
+            else if (running_processes[i]->pcb.total_execution_time >= running_processes[i]->pcb.max_execution_time) {
+                running_processes[i]->pcb.state = TERMINATED;
+                
+                printf("[DENBORA GAINDITUTA] %d prozesuak denbora maximoa gainditu du\n", running_processes[i]->pcb.pid);
+                fflush(stdout);
+                extern int processes_critical_failure;
+                processes_critical_failure++;
+                free(running_processes[i]);
+                running_processes[i] = NULL;
+            }
         }
-        free(current_process);
-        current_process = NULL;
-        has_enemy = false;
     }
-
-    // Denbora maximoa egiaztatu
-    if (current_process != NULL && current_process->pcb.total_execution_time >= current_process->pcb.max_execution_time) {
-        current_process->pcb.state = TERMINATED;
-        if (enable_scheduler_prints) printf("[antolatzailea] Denbora maximoa gainditua! Prozesua %d amaitua\n", current_process->pcb.pid);
-        free(current_process);
-        current_process = NULL;
-        has_enemy = false;
-    }
+    
+    
+    cpu_tick();
 }

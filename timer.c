@@ -14,7 +14,7 @@ void *timer(void *arg){
         tick++;
         if(tick == ts->nticks){
             tick = 0;
-            if (ts->function == PROCESS_GENERATOR) {
+            if (ts->function == LOADER) {
                 load(ts->id);
             } else if (ts->function == TIMER) {
                 if (enable_timer_prints) printf("[tenporizadorea] Tenporizadorearen id=%d\n", ts->id);
